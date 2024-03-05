@@ -1,3 +1,4 @@
+//nolint:forbidigo // This is a command line tool
 package main
 
 import (
@@ -71,15 +72,21 @@ func main() {
 	splittedImplementationPackage := strings.Split(implementationPackage, "/")
 	implementationPackageName := splittedImplementationPackage[len(splittedImplementationPackage)-1]
 
+	// Struct name
+	serviceStructName := implementationName + "RDS"
+	clientStructName := implementationName + "RDC"
+
 	// Assign values to config
 	config := generator.InitConfig{
+		ServiceStructName:          serviceStructName,
+		ClientStructName:           clientStructName,
 		InterfaceType:              interfaceType,
 		Implementation:             implementation,
+		ImplementationPackageName:  implementationPackageName,
 		ImplementationName:         implementationName,
 		ImplementationRelativePath: implementationRelativePath,
-		ImplementationDirectory:    findAbsolutePathFromRelative(implementationRelativePath),
 		ImplementationPackage:      implementationPackage,
-		ImplementationPackageName:  implementationPackageName,
+		ImplementationDirectory:    findAbsolutePathFromRelative(implementationRelativePath),
 	}
 
 	println("Generating for", config.ImplementationName)

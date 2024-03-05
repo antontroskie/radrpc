@@ -49,6 +49,7 @@ func IsNamedType(t types.Type, path, name string) bool {
 	return obj.Name() == name && obj.Pkg() != nil && obj.Pkg().Path() == path
 }
 
+// GetPathAndQualifiedName returns the package path and type name of a given type.
 func GetPathAndQualifiedName(sourceType string, config Config) (string, string) {
 	idx := strings.LastIndexByte(sourceType, '/')
 	if idx == -1 {
@@ -75,6 +76,7 @@ func GetPathAndQualifiedName(sourceType string, config Config) (string, string) 
 	return packagePath, typeName
 }
 
+// SplitSourceType splits the source type into package and type name.
 func SplitSourceType(sourceType string) (string, string) {
 	idx := strings.LastIndexByte(sourceType, '.')
 	if idx == -1 {
@@ -93,7 +95,18 @@ func SplitSourceType(sourceType string) (string, string) {
 
 // LoadPackage loads the package and returns the package.
 func LoadPackage(path string) *packages.Package {
-	cfg := &packages.Config{Mode: packages.NeedTypes | packages.NeedImports}
+	cfg := &packages.Config{
+		Mode:       packages.NeedName | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedDeps | packages.NeedImports,
+		Dir:        "",
+		Context:    nil,
+		Logf:       nil,
+		Env:        nil,
+		BuildFlags: nil,
+		Fset:       nil,
+		ParseFile:  nil,
+		Tests:      false,
+		Overlay:    nil,
+	}
 	pkgs, err := packages.Load(cfg, path)
 	if err != nil {
 		FailErr(fmt.Errorf("loading packages for inspection: %w", err))
@@ -131,8 +144,16 @@ func LoadRepository() ([]*packages.Package, error) {
 	}
 
 	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedDeps | packages.NeedImports,
-		Dir:  dir,
+		Mode:       packages.NeedName | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedDeps | packages.NeedImports,
+		Dir:        dir,
+		Context:    nil,
+		Logf:       nil,
+		Env:        nil,
+		BuildFlags: nil,
+		Fset:       nil,
+		ParseFile:  nil,
+		Tests:      false,
+		Overlay:    nil,
 	}
 
 	pkgs, err = packages.Load(cfg, "./...")
@@ -321,6 +342,7 @@ func IsGobType(typ types.Type) bool {
 	return false
 }
 
+// ListImplementations returns a list of types that implement the given interface.
 func ListImplementations(
 	interfacePkgs []*packages.Package,
 	interfaceName string,
@@ -334,6 +356,7 @@ func ListImplementations(
 	return implementations, nil
 }
 
+// findInterfaceInfo finds the interface info from the source packages.
 func findInterfaceInfo(
 	interfaceName string,
 	srcPackages []*packages.Package,
@@ -351,6 +374,7 @@ func findInterfaceInfo(
 	return nil, fmt.Errorf("interface %s not found", interfaceName)
 }
 
+// findImplementations finds the implementations of the given interface.
 func findImplementations(
 	interfaceSearched *types.Interface,
 	srcPackages []*packages.Package,

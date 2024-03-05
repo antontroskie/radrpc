@@ -153,7 +153,7 @@ linters-settings:
   nolintlint:
     # Exclude following linters from requiring an explanation.
     # Default: []
-    allow-no-explanation: [ funlen, gocognit, lll ]
+    allow-no-explanation: [funlen, gocognit, lll]
     # Enable to require an explanation of nonzero length after each nolint directive.
     # Default: false
     require-explanation: true
@@ -244,8 +244,8 @@ linters:
 
     ## you may want to enable
     - decorder # checks declaration order and count of types, constants, variables and functions
-    # - exhaustruct # [highly recommend to enable] checks if all structure fields are initialized
-    # - gci # controls golang package import order and makes it always deterministic
+    - exhaustruct # [highly recommend to enable] checks if all structure fields are initialized
+    - gci # controls golang package import order and makes it always deterministic
     - ginkgolinter # [if you use ginkgo/gomega] enforces standards of using ginkgo and gomega
     # - godox # detects FIXME, TODO and other comment keywords
     #- goheader # checks is file header matches to pattern
@@ -256,8 +256,8 @@ linters:
     - wrapcheck # checks that errors returned from external packages are wrapped
 
     ## disabled
-    #- containedctx # detects struct contained context.Context field
-    #- contextcheck # [too many false positives] checks the function whether use a non-inherited context
+    - containedctx # detects struct contained context.Context field
+    # - contextcheck # [too many false positives] checks the function whether use a non-inherited context
     #- depguard # [replaced by gomodguard] checks if package imports are in a list of acceptable packages
     #- dogsled # checks assignments with too many blank identifiers (e.g. x, _, _, _, := f())
     #- dupword # [useless without config] checks for duplicate words in the source code
@@ -296,13 +296,13 @@ issues:
 
   exclude-rules:
     - source: "^//\\s*go:generate\\s"
-      linters: [ lll ]
+      linters: [lll]
     - source: "(noinspection|TODO)"
-      linters: [ godot ]
+      linters: [godot]
     - source: "//noinspection"
-      linters: [ gocritic ]
+      linters: [gocritic]
     - source: "^\\s+if _, ok := err\\.\\([^.]+\\.InternalError\\); ok {"
-      linters: [ errorlint ]
+      linters: [errorlint]
     - path: "_test\\.go"
       linters:
         - bodyclose

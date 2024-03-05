@@ -7,10 +7,9 @@ import (
 	"io"
 	"net"
 
+	"github.com/antontroskie/radrpc/pkg/rpc/itf"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-
-	"github.com/antontroskie/radrpc/pkg/rpc/itf"
 )
 
 // EncodeMessage encodes a message.
@@ -41,8 +40,11 @@ func DecodeMessage[T any](data []byte) (T, error) {
 func WriteHeartbeatRequest(conn net.Conn) error {
 	id := uuid.New().String()
 	msg := itf.RPCMessageReq{
-		ID:   id,
-		Type: itf.HeartbeatRequest,
+		ID:        id,
+		Type:      itf.HeartbeatRequest,
+		TimeStamp: 0,
+		Method:    "",
+		Args:      []any{},
 	}
 	data, err := EncodeMessage(msg)
 	if err != nil {
@@ -54,8 +56,11 @@ func WriteHeartbeatRequest(conn net.Conn) error {
 // WriteHeartbeatResponse writes a heartbeat response.
 func WriteHeartbeatResponse(conn net.Conn, id string) error {
 	msg := itf.RPCMessageRes{
-		ID:   id,
-		Type: itf.HeartbeatResponse,
+		ID:              id,
+		Type:            itf.HeartbeatResponse,
+		TimeStamp:       0,
+		ResponseError:   "",
+		ResponseSuccess: nil,
 	}
 	data, err := EncodeMessage(msg)
 	if err != nil {

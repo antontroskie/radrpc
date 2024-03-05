@@ -97,59 +97,148 @@ func (c *ConnsWithCancel) Get(conn net.Conn) (context.CancelFunc, bool) {
 }
 
 // validateConfig validates the service configuration.
-func validateConfig(config *RPCServiceConfig) error {
-	if itf.IsDefaultValue(config) {
+func validateConfig(serviceConfig *RPCServiceConfig) error {
+	if serviceConfig == nil || itf.IsDefaultValue(serviceConfig) {
 		return fmt.Errorf("no configuration applied")
 	}
-	if config.MaxConnections < 1 {
+	if serviceConfig.MaxConnections < 1 {
 		return fmt.Errorf("invalid configuration: must allow at least one connection")
 	}
-	if config.Host == "" {
+	if serviceConfig.Host == "" {
 		return fmt.Errorf("invalid configuration: no host specified")
 	}
-	if config.MaxRPCCallWaitTime < time.Millisecond {
+	if serviceConfig.MaxRPCCallWaitTime < time.Millisecond {
 		return fmt.Errorf(
 			"invalid configuration: max rpc call wait time must be at least 1 millisecond",
 		)
 	}
-	if config.MaxConcurrentCalls < 1 {
+	if serviceConfig.MaxConcurrentCalls < 1 {
 		return fmt.Errorf("invalid configuration: max concurrent calls must be at least 1")
 	}
-	if config.MaxMessageRetries < 1 {
+	if serviceConfig.MaxMessageRetries < 1 {
 		return fmt.Errorf("invalid configuration: max message retries must be at least 1")
 	}
-	if config.HeartbeatInterval < time.Second {
+	if serviceConfig.HeartbeatInterval < time.Second {
 		return fmt.Errorf(
 			"invalid configuration: heartbeat interval must be at least 1 second",
 		)
 	}
-	if config.UseTLS && config.TLSConfig == nil {
+	if serviceConfig.UseTLS && serviceConfig.TLSConfig == nil {
 		return fmt.Errorf("invalid configuration: no tls config specified")
 	}
-	if config.LoggerInterface == nil {
-		config.LoggerInterface = itf.NewDefaultLogger()
+	if serviceConfig.LoggerInterface == nil {
+		serviceConfig.LoggerInterface = itf.NewDefaultLogger()
 	}
 	return nil
 }
 
+// spawnConnectionHandler spawns a connection handler.
+func spawnConnectionHandler(
+	wg *sync.WaitGroup,
+	conn net.Conn,
+	serviceConfig RPCServiceConfig,
+	serviceInterface RPCServiceInterface,
+	connsWithCancel ConnsWithCancel,
+	parseRPCMessage func(msg itf.RPCMessageReq) itf.RPCMessageRes,
+) {
+	// Create context with cancel
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Add new connection
+	connsWithCancel.Add(conn, cancel)
+	serviceInterface.SetNewConn(conn)
+
+	// Spawn connection handler
+	wg.Add(1)
+	go func(net.Conn) {
+		handleConnection(
+			ctx,
+			serviceInterface,
+			serviceConfig,
+			conn,
+			parseRPCMessage,
+			connsWithCancel,
+		)
+		wg.Done()
+	}(conn)
+}
+
+// acceptNewConnections accepts new connections.
+func acceptNewConnections(
+	listener net.Listener,
+	serviceInterface RPCServiceInterface,
+	serviceConfig RPCServiceConfig,
+	connsWithCancel ConnsWithCancel,
+	parseRPCMessage func(msg itf.RPCMessageReq) itf.RPCMessageRes,
+) error {
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+	wg.Add(1)
+	go checkActiveConnections(serviceConfig, serviceInterface, connsWithCancel)
+	for {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return fmt.Errorf("error accepting: %w", acceptErr)
+		}
+		// Check if maximum amount of connections have been reached
+		if len(serviceInterface.GetConns()) >= serviceConfig.MaxConnections {
+			serviceConfig.LoggerInterface.LogInfo(
+				"Maximum connections reached, closing new connection",
+			)
+			response := itf.RPCMessageRes{
+				ID:              "",
+				Type:            0,
+				TimeStamp:       0,
+				ResponseError:   "maximum connections reached",
+				ResponseSuccess: nil,
+			}
+			ms, encodeErr := connhandler.EncodeMessage(response)
+			if encodeErr != nil {
+				return fmt.Errorf("error encoding: %w", encodeErr)
+			}
+			if writeErr := connhandler.WriteMessage(conn, ms); writeErr != nil {
+				return fmt.Errorf("error writing: %w", writeErr)
+			}
+			if closeErr := conn.Close(); closeErr != nil {
+				return fmt.Errorf("error closing: %w", closeErr)
+			}
+			continue
+		}
+
+		incomingConn := conn.RemoteAddr().String()
+		_, alreadyConnected := connsWithCancel.Get(conn)
+		if !alreadyConnected {
+			serviceConfig.LoggerInterface.LogInfo(
+				fmt.Sprintf("adding connection: %s", incomingConn),
+			)
+			spawnConnectionHandler(
+				&wg,
+				conn,
+				serviceConfig,
+				serviceInterface,
+				connsWithCancel,
+				parseRPCMessage,
+			)
+		}
+	}
+}
+
 // StartService starts the service.
 func StartService(
-	m RPCServiceInterface,
+	serviceInterface RPCServiceInterface,
 	parseRPCMessage func(msg itf.RPCMessageReq) itf.RPCMessageRes,
 ) error {
 	connsWithCancel := NewConnsWithCancel()
 
 	// Check if service is already started
-	if len(m.GetConns()) > 0 {
+	if len(serviceInterface.GetConns()) > 0 {
 		return fmt.Errorf("service already started")
 	}
-	serviceConfig := m.GetConfig()
+	serviceConfig := serviceInterface.GetConfig()
 	if err := validateConfig(&serviceConfig); err != nil {
 		return err
 	}
 
-	wg := sync.WaitGroup{}
-	defer wg.Wait()
 	serviceConfig.LoggerInterface.LogInfo(fmt.Sprintf("starting service on %s", serviceConfig.Host))
 	var listener net.Listener
 	if serviceConfig.UseTLS {
@@ -165,72 +254,18 @@ func StartService(
 			return fmt.Errorf("error listening: %w", listenErr)
 		}
 	}
-	wg.Add(1)
-	go checkActiveConnections(serviceConfig, m, connsWithCancel)
-	for {
-		var acceptErr error
-		conn, acceptErr := listener.Accept()
-		if acceptErr != nil {
-			return fmt.Errorf("error accepting: %w", acceptErr)
-		}
-		// Check if maximum amount of connections have been reached
-		if len(m.GetConns()) >= serviceConfig.MaxConnections {
-			serviceConfig.LoggerInterface.LogInfo(
-				"Maximum connections reached, closing new connection",
-			)
-			response := itf.RPCMessageRes{ResponseError: "maximum connections reached"}
-			ms, encodeErr := connhandler.EncodeMessage(response)
-			if encodeErr != nil {
-				return fmt.Errorf("error encoding: %w", encodeErr)
-			}
-			if writeErr := connhandler.WriteMessage(conn, ms); writeErr != nil {
-				return fmt.Errorf("error writing: %w", writeErr)
-			}
-			if closeErr := conn.Close(); closeErr != nil {
-				return fmt.Errorf("error closing: %w", closeErr)
-			}
-			continue
-		}
-
-		incomingConn := conn.RemoteAddr().String()
-		allConns := m.GetConns()
-		alreadyConnected := false
-		serviceConfig.LoggerInterface.LogInfo(
-			fmt.Sprintf("new connection request from: %s", incomingConn),
-		)
-		for _, c := range allConns {
-			if c.RemoteAddr().String() == incomingConn {
-				alreadyConnected = true
-				break
-			}
-		}
-		if !alreadyConnected {
-			serviceConfig.LoggerInterface.LogInfo(
-				fmt.Sprintf("adding connection: %s", incomingConn),
-			)
-
-			// Add new connection
-			m.SetNewConn(conn)
-			wg.Add(1)
-			ctx, cancel := context.WithCancel(context.Background())
-			connsWithCancel.Add(conn, cancel)
-			go func(net.Conn) {
-				handleServiceConnection(
-					m,
-					serviceConfig,
-					conn,
-					parseRPCMessage,
-					connsWithCancel,
-					ctx,
-				)
-				wg.Done()
-			}(conn)
-		}
-	}
+	return acceptNewConnections(
+		listener,
+		serviceInterface,
+		serviceConfig,
+		connsWithCancel,
+		parseRPCMessage,
+	)
 }
 
-func StopService(m RPCServiceInterface) error {
-	for _, conn := range m.GetConns() {
+// StopService stops the service.
+func StopService(serviceInterface RPCServiceInterface) error {
+	for _, conn := range serviceInterface.GetConns() {
 		if err := conn.Close(); err != nil {
 			return fmt.Errorf("error closing: %w", err)
 		}
@@ -238,33 +273,35 @@ func StopService(m RPCServiceInterface) error {
 	return nil
 }
 
+// removeConnection removes a connection.
 func removeConnection(
-	config RPCServiceConfig,
-	m RPCServiceInterface,
+	serviceConfig RPCServiceConfig,
+	serviceInterface RPCServiceInterface,
 	connsWithCancel ConnsWithCancel,
 	conn net.Conn,
 ) context.CancelFunc {
 	connRemoteAddr := conn.RemoteAddr().String()
-	allConns := m.GetConns()
-	config.LoggerInterface.LogInfo(
+	allConns := serviceInterface.GetConns()
+	serviceConfig.LoggerInterface.LogInfo(
 		fmt.Sprintf("removing connection: %s", connRemoteAddr),
 	)
 	cancel, ok := connsWithCancel.Get(conn)
 	for i, c := range allConns {
 		if c.RemoteAddr().String() == connRemoteAddr {
 			allConns = append(allConns[:i], allConns[i+1:]...)
-			m.SetConns(allConns)
+			serviceInterface.SetConns(allConns)
 			connsWithCancel.Remove(conn)
 		}
 	}
 	if !ok {
-		config.LoggerInterface.LogError(
+		serviceConfig.LoggerInterface.LogError(
 			fmt.Errorf("error getting cancel handler for: %s", connRemoteAddr),
 		)
 	}
 	return cancel
 }
 
+// isNetworkError checks if an error is a network error.
 func isNetworkError(err error) bool {
 	var opError *net.OpError
 	return errors.As(err, &opError)
@@ -272,29 +309,36 @@ func isNetworkError(err error) bool {
 
 // checkActiveConnections checks which connections are still active.
 func checkActiveConnections(
-	config RPCServiceConfig,
-	m RPCServiceInterface,
+	serviceConfig RPCServiceConfig,
+	serviceInterface RPCServiceInterface,
 	connsWithCancel ConnsWithCancel,
 ) {
 	for {
-		allConns := m.GetConns()
+		allConns := serviceInterface.GetConns()
 		for _, conn := range allConns {
 			if err := connhandler.WriteHeartbeatRequest(conn); err != nil {
 				switch {
 				case isNetworkError(errors.Cause(err)):
-					cancel := removeConnection(config, m, connsWithCancel, conn)
+					cancel := removeConnection(
+						serviceConfig,
+						serviceInterface,
+						connsWithCancel,
+						conn,
+					)
 					if cancel != nil {
 						cancel()
 					}
 					if closeErr := conn.Close(); closeErr != nil {
-						config.LoggerInterface.LogError(closeErr)
+						serviceConfig.LoggerInterface.LogError(closeErr)
 					}
 				default:
-					config.LoggerInterface.LogError(fmt.Errorf("error writing heartbeat: %w", err))
+					serviceConfig.LoggerInterface.LogError(
+						fmt.Errorf("error writing heartbeat: %w", err),
+					)
 				}
 			}
 		}
-		time.Sleep(config.HeartbeatInterval)
+		time.Sleep(serviceConfig.HeartbeatInterval)
 	}
 }
 
@@ -302,12 +346,12 @@ func checkActiveConnections(
 func handleNewMessage(
 	msg []byte,
 	conn net.Conn,
-	config RPCServiceConfig,
+	serviceConfig RPCServiceConfig,
 	parseRPCMessage func(msg itf.RPCMessageReq) itf.RPCMessageRes,
 ) {
 	rpcMsgReq, decodeErr := connhandler.DecodeMessage[itf.RPCMessageReq](msg)
 	if decodeErr != nil {
-		config.LoggerInterface.LogError(fmt.Errorf("error decoding: %w", decodeErr))
+		serviceConfig.LoggerInterface.LogError(fmt.Errorf("error decoding: %w", decodeErr))
 	}
 
 	// Check if the message is a heartbeat request
@@ -316,17 +360,17 @@ func handleNewMessage(
 		// We've received a heartbeat request, we should respond with a heartbeat response
 		heartBeatErr := connhandler.WriteHeartbeatResponse(conn, rpcMsgReq.ID)
 		if heartBeatErr != nil {
-			config.LoggerInterface.LogError(fmt.Errorf("error writing: %w", heartBeatErr))
+			serviceConfig.LoggerInterface.LogError(fmt.Errorf("error writing: %w", heartBeatErr))
 		}
 		return
 	case itf.HeartbeatResponse:
 		// We've received a heartbeat response, we should do nothing
 		return
 
-	case itf.MethodRequest:
+	case itf.ExecMethodRequest:
 		timeStampDateVal := time.Unix(0, rpcMsgReq.TimeStamp)
 		requestCallStructure := itf.GetDisplayCallStructureFromReq(rpcMsgReq)
-		config.LoggerInterface.LogDebug(fmt.Sprintf("received request: [%s] %v -> %v",
+		serviceConfig.LoggerInterface.LogDebug(fmt.Sprintf("received request: [%s] %v -> %v",
 			timeStampDateVal.Format(time.RFC3339Nano),
 			rpcMsgReq.ID,
 			requestCallStructure,
@@ -336,16 +380,16 @@ func handleNewMessage(
 			func() itf.RPCMessageRes {
 				return parseRPCMessage(rpcMsgReq)
 			},
-			config.MaxRPCCallWaitTime,
+			serviceConfig.MaxRPCCallWaitTime,
 		)
 		if executeErr != nil {
 			rpcMsgRes.ID = rpcMsgReq.ID
-			config.LoggerInterface.LogError(fmt.Errorf("error executing: %w", executeErr))
+			serviceConfig.LoggerInterface.LogError(fmt.Errorf("error executing: %w", executeErr))
 			rpcMsgRes.ResponseError = fmt.Sprintf("error executing: %s", executeErr)
 		}
 
 		rpcMsgRes.TimeStamp = time.Now().UnixNano()
-		rpcMsgRes.Type = itf.MethodResponse
+		rpcMsgRes.Type = itf.ExecMethodResponse
 
 		trySendMessage := func() error {
 			ms, encodeErr := connhandler.EncodeMessage(rpcMsgRes)
@@ -359,39 +403,39 @@ func handleNewMessage(
 			return nil
 		}
 
-		if err := utils.RetryOperation(trySendMessage, config.MaxMessageRetries, config.MaxRPCCallWaitTime, func(err error) {
-			config.LoggerInterface.LogError(fmt.Errorf("error sending: %w", err))
+		if err := utils.RetryOperation(trySendMessage, serviceConfig.MaxMessageRetries, serviceConfig.MaxRPCCallWaitTime, func(err error) {
+			serviceConfig.LoggerInterface.LogError(fmt.Errorf("error sending: %w", err))
 		}); err != nil {
-			config.LoggerInterface.LogError(
+			serviceConfig.LoggerInterface.LogError(
 				fmt.Errorf("max retries reached, error sending: %w", err),
 			)
 		}
 
-	case itf.MethodResponse:
-		config.LoggerInterface.LogError(
+	case itf.ExecMethodResponse:
+		serviceConfig.LoggerInterface.LogError(
 			fmt.Errorf("cannot handle message type: %v", rpcMsgReq.Type),
 		)
 	}
 }
 
-// handleServiceConnection handles a service connection.
-func handleServiceConnection(
-	m RPCServiceInterface,
-	config RPCServiceConfig,
+// handleConnection handles a service connection.
+func handleConnection(
+	ctx context.Context,
+	serviceInterface RPCServiceInterface,
+	serviceConfig RPCServiceConfig,
 	conn net.Conn,
 	parseRPCMessage func(msg itf.RPCMessageReq) itf.RPCMessageRes,
 	connsWithCancel ConnsWithCancel,
-	ctx context.Context,
 ) {
 	wg := sync.WaitGroup{}
-	mp, _ := ants.NewPoolWithFunc(config.MaxConcurrentCalls, func(msg any) {
+	mp, _ := ants.NewPoolWithFunc(serviceConfig.MaxConcurrentCalls, func(msg any) {
 		wg.Add(1)
-		handleNewMessage(msg.([]byte), conn, config, parseRPCMessage)
+		handleNewMessage(msg.([]byte), conn, serviceConfig, parseRPCMessage)
 	})
 	defer wg.Wait()
 	defer func() {
-		if releaseErr := mp.ReleaseTimeout(config.MaxRPCCallWaitTime); releaseErr != nil {
-			config.LoggerInterface.LogError(errors.Wrap(releaseErr, "error releasing"))
+		if releaseErr := mp.ReleaseTimeout(serviceConfig.MaxRPCCallWaitTime); releaseErr != nil {
+			serviceConfig.LoggerInterface.LogError(errors.Wrap(releaseErr, "error releasing"))
 		}
 	}()
 	for {
@@ -402,9 +446,9 @@ func handleServiceConnection(
 		default:
 			msg, readErr := connhandler.ReadMessage(conn)
 			if readErr != nil {
-				removeConnection(config, m, connsWithCancel, conn)
+				removeConnection(serviceConfig, serviceInterface, connsWithCancel, conn)
 				if closeErr := conn.Close(); closeErr != nil {
-					config.LoggerInterface.LogError(closeErr)
+					serviceConfig.LoggerInterface.LogError(closeErr)
 				}
 				return
 			}
@@ -412,7 +456,7 @@ func handleServiceConnection(
 				continue
 			}
 			if invokeErr := mp.Invoke(msg); invokeErr != nil {
-				config.LoggerInterface.LogError(fmt.Errorf("error invoking: %w", invokeErr))
+				serviceConfig.LoggerInterface.LogError(fmt.Errorf("error invoking: %w", invokeErr))
 			}
 		}
 	}

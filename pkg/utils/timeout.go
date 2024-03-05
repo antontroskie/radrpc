@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// RunWithTimeout runs a task with a timeout.
 func RunWithTimeout[T any](task func() T, timeout time.Duration) (T, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -24,6 +25,7 @@ func RunWithTimeout[T any](task func() T, timeout time.Duration) (T, error) {
 	}
 }
 
+// RetryOperation retries an operation a maximum of maxRetries times, waiting waitTime between each retry.
 func RetryOperation(
 	operation func() error,
 	maxRetries int,

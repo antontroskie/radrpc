@@ -1,3 +1,4 @@
+//nolint:forbidigo // Needs default logger implementation that prints to stdout
 package itf
 
 import (
@@ -36,10 +37,14 @@ func GetDisplayCallStructureFromReq(
 type RPCMessageRequestType int
 
 const (
+	// HeartbeatRequest is a heartbeat request.
 	HeartbeatRequest RPCMessageRequestType = iota
+	// HeartbeatResponse is a heartbeat response.
 	HeartbeatResponse
-	MethodRequest
-	MethodResponse
+	// ExecMethodRequest is an RPC call from the client to execute a remote function.
+	ExecMethodRequest
+	// ExecMethodResponse is an RPC response from the server after executing a remote function.
+	ExecMethodResponse
 )
 
 // RPCMessageReq is a request for an RPC message.
@@ -81,22 +86,27 @@ type RPCLogger interface {
 // defaultLogger is the default logger for RPC messages.
 type defaultLogger struct{}
 
+// LogInfo logs an info message.
 func (l *defaultLogger) LogInfo(info string) {
 	println(info)
 }
 
+// LogDebug logs a debug message.
 func (l *defaultLogger) LogDebug(debug string) {
 	println(debug)
 }
 
+// LogWarn logs a warning message.
 func (l *defaultLogger) LogWarn(warn string) {
 	println(warn)
 }
 
+// LogError logs an error message.
 func (l *defaultLogger) LogError(err error) {
 	println(err.Error())
 }
 
+// NewDefaultLogger creates a new default logger.
 func NewDefaultLogger() RPCLogger {
 	return &defaultLogger{}
 }
