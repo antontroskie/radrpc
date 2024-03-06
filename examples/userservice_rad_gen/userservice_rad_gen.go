@@ -9,6 +9,7 @@ import (
 
 import (
 	"encoding/gob"
+
 	userservice "github.com/antontroskie/radrpc/examples/userservice"
 	rdc "github.com/antontroskie/radrpc/pkg/rpc/client"
 	itf "github.com/antontroskie/radrpc/pkg/rpc/itf"
@@ -39,11 +40,13 @@ func NewUserServiceRPCRDService() *userServiceRPCRDS {
 		userServiceRPCRDSMutex: new(sync.RWMutex),
 	}
 }
+
 func NewUserServiceRPCRDClient() *userServiceRPCRDC {
 	return &userServiceRPCRDC{
 		userServiceRPCRDCMutex: new(sync.RWMutex),
 	}
 }
+
 func (s *userServiceRPCRDS) parseRPCMessage(msg itf.RPCMessageReq) itf.RPCMessageRes {
 	id := msg.ID
 	switch msg.Method {
@@ -98,40 +101,48 @@ func (s *userServiceRPCRDS) parseRPCMessage(msg itf.RPCMessageReq) itf.RPCMessag
 		}
 	}
 }
+
 func (s *userServiceRPCRDS) GetConns() []net.Conn {
 	s.userServiceRPCRDSMutex.RLock()
 	defer s.userServiceRPCRDSMutex.RUnlock()
 	return s.userServiceRPCRDSConns
 }
+
 func (s *userServiceRPCRDS) SetConns(conns []net.Conn) {
 	s.userServiceRPCRDSMutex.Lock()
 	defer s.userServiceRPCRDSMutex.Unlock()
 	s.userServiceRPCRDSConns = conns
 }
+
 func (s *userServiceRPCRDS) SetNewConn(conn net.Conn) {
 	s.userServiceRPCRDSMutex.Lock()
 	defer s.userServiceRPCRDSMutex.Unlock()
 	s.userServiceRPCRDSConns = append(s.userServiceRPCRDSConns, conn)
 }
+
 func (s *userServiceRPCRDS) GetConfig() rds.RPCServiceConfig {
 	s.userServiceRPCRDSMutex.RLock()
 	defer s.userServiceRPCRDSMutex.RUnlock()
 	return s.userServiceRPCRDSConfig
 }
+
 func (s *userServiceRPCRDS) SetConfig(config rds.RPCServiceConfig) {
 	s.userServiceRPCRDSMutex.Lock()
 	defer s.userServiceRPCRDSMutex.Unlock()
 	s.userServiceRPCRDSConfig = config
 }
+
 func (s *userServiceRPCRDS) StartService(m userservice.UserServiceRPC, config rds.RPCServiceConfig) error {
 	gob.Register([]userservice.User{})
 	s.SetConfig(config)
 	s.userServiceRPCRDSInterf = m
 	return rds.StartService(s, s.parseRPCMessage)
 }
+
 func (s *userServiceRPCRDS) StopService() error {
 	return rds.StopService(s)
 }
+
 func (s *UserServiceRPCRDC) CreateNewUser(name string, age int) {
 	config := s.client.userServiceRPCRDCConfig
 	logger := config.LoggerInterface
@@ -140,20 +151,21 @@ func (s *UserServiceRPCRDC) CreateNewUser(name string, age int) {
 		Args: []any{
 			name, age,
 		},
-		Type: itf.MethodRequest,
+		Type: itf.ExecMethodRequest,
 	}
 	res := rdc.SendAndReceiveMessage(s.client, msg)
 	if res.ResponseError != "" {
 		logger.LogError(fmt.Errorf("error executing method: %v", res.ResponseError))
 	}
 }
+
 func (s *UserServiceRPCRDC) GetUsers() []userservice.User {
 	config := s.client.userServiceRPCRDCConfig
 	logger := config.LoggerInterface
 	msg := itf.RPCMessageReq{
 		Method: "GetUsers",
 		Args:   []any{},
-		Type:   itf.MethodRequest,
+		Type:   itf.ExecMethodRequest,
 	}
 	res := rdc.SendAndReceiveMessage(s.client, msg)
 	if res.ResponseError != "" {
@@ -169,36 +181,43 @@ func (s *UserServiceRPCRDC) GetUsers() []userservice.User {
 	}
 	return response
 }
+
 func (s *userServiceRPCRDC) GetConn() net.Conn {
 	s.userServiceRPCRDCMutex.RLock()
 	defer s.userServiceRPCRDCMutex.RUnlock()
 	return s.userServiceRPCRDCConn
 }
+
 func (s *userServiceRPCRDC) SetConn(conn net.Conn) {
 	s.userServiceRPCRDCMutex.Lock()
 	defer s.userServiceRPCRDCMutex.Unlock()
 	s.userServiceRPCRDCConn = conn
 }
+
 func (s *userServiceRPCRDC) GetConfig() rdc.RPCClientConfig {
 	s.userServiceRPCRDCMutex.RLock()
 	defer s.userServiceRPCRDCMutex.RUnlock()
 	return s.userServiceRPCRDCConfig
 }
+
 func (s *userServiceRPCRDC) SetConfig(config rdc.RPCClientConfig) {
 	s.userServiceRPCRDCMutex.Lock()
 	defer s.userServiceRPCRDCMutex.Unlock()
 	s.userServiceRPCRDCConfig = config
 }
+
 func (s *userServiceRPCRDC) GetMessagePool() rdc.RPCClientMessagePool {
 	s.userServiceRPCRDCMutex.RLock()
 	defer s.userServiceRPCRDCMutex.RUnlock()
 	return s.userServiceRPCRDCMessagePool
 }
+
 func (s *userServiceRPCRDC) SetMessagePool(config rdc.RPCClientMessagePool) {
 	s.userServiceRPCRDCMutex.Lock()
 	defer s.userServiceRPCRDCMutex.Unlock()
 	s.userServiceRPCRDCMessagePool = config
 }
+
 func (s *userServiceRPCRDC) Connect(config rdc.RPCClientConfig) (*UserServiceRPCRDC, error) {
 	s.SetConfig(config)
 	gob.Register([]userservice.User{})
@@ -207,6 +226,7 @@ func (s *userServiceRPCRDC) Connect(config rdc.RPCClientConfig) (*UserServiceRPC
 	}
 	return interf, rdc.Connect(s)
 }
+
 func (s *userServiceRPCRDC) Disconnect() error {
 	return rdc.Disconnect(s)
 }
